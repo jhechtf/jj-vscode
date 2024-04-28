@@ -16,22 +16,41 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "menus": {
-      "scm/title": [
+    "views": {
+      "scm": [
         {
-          "command": "jj-vscode.helloWorld",
-          "when": "scmProvider == jj",
-          "group": "navigation@1"
+          "id": "jj.views.branches",
+          "name": "Branches",
+          "contextualTitle": "Jujutsu",
+          "icon": "$(megaphone)",
+          "visibility": "visible"
         }
-      ],
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "jj.views.branches",
+        "contents": "You do not have any branches in this project"
+      }
+    ],
+    "menus": {
       "scm/resourceState/context": [
         {
-          "command": "jj-vscode.helloWorld",
+          "command": "jj.gitPush",
           "group": "inline@1"
         }
       ]
     },
     "commands": [
+      {
+        "command": "jj.refreshBranches",
+        "title": "JJ: Refresh Branches",
+        "shortTitle": "Refresh JJ Branches"
+      },
+      {
+        "command": "jj.moveToBranch",
+        "title": "JJ: Move to Branch"
+      },
       {
         "command": "jj.listBranches",
         "title": "JJ: List Branches"

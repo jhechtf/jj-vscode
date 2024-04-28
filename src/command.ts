@@ -5,6 +5,8 @@ import {
 	type ChildProcessByStdio,
 } from 'node:child_process';
 import type { Writable, Readable } from 'node:stream';
+import { ReadableStream, WritableStream } from 'node:stream/web';
+
 type StdType = 'piped' | 'inherit' | 'null';
 
 export interface CommandArgs {
@@ -15,6 +17,8 @@ export interface CommandArgs {
 	stdout: StdType;
 	stderr: StdType;
 	signal: AbortSignal;
+	splitByLines: boolean;
+	controller: AbortController;
 }
 
 export class Run {
@@ -22,6 +26,7 @@ export class Run {
 	private done = false;
 	private success = false;
 	private signal: AbortSignal;
+	private controller: AbortController;
 	constructor(
 		public cmd: string,
 		public options: Partial<CommandArgs> = {
@@ -29,14 +34,60 @@ export class Run {
 			stdin: 'inherit',
 			stdout: 'inherit',
 			stderr: 'inherit',
+			splitByLines: false,
+			controller: new AbortController(),
 		},
 	) {
-		const { signal } = new AbortController();
-		this.signal = signal;
+		if (options.controller) {
+			this.controller = options.controller;
+			this.signal = this.controller.signal;
+		} else {
+			// Realistically this code should never be gotten to, but like, y'know.
+			this.controller = new AbortController();
+			this.signal = this.controller.signal;
+		}
+
 		this.process = spawn(cmd, options.args || [], {
 			...options,
-			signal,
+			signal: this.signal,
 		});
+	}
+
+	streamOutput() {
+		const process = this.process;
+		const options = this.options;
+		return {
+			stdout: new ReadableStream<string>({
+				start(controller) {
+					process.stdout.on('data', (chk: Buffer) => {
+						const str = chk.toString();
+						if (options.splitByLines) {
+							for (const line of str.split(/\r?\n/)) controller.enqueue(line);
+						} else {
+							controller.enqueue(str);
+						}
+					});
+					process.on('close', (code) => {
+						controller.close();
+					});
+				},
+			}),
+			stderr: new ReadableStream({
+				start(controller) {
+					process.on('close', (code) => {
+						controller.close();
+					});
+					process.stderr.on('data', (chk) => {
+						const str = chk.toString();
+						if (options.splitByLines) {
+							for (const line of str.split(/\r?\n/)) controller.enqueue(line);
+						} else {
+							controller.enqueue(str);
+						}
+					});
+				},
+			}),
+		};
 	}
 
 	output(): Promise<string> {

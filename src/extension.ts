@@ -1,124 +1,163 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
-import * as vscode from 'vscode';
-import { Run } from './command';
-import path from 'node:path';
-import { gitPush } from './commands/gitPush';
-import { listBranches } from './commands/listBranches';
+import {
+	type Event,
+	type TreeDataProvider,
+	TreeView,
+	commands,
+	window,
+	workspace,
+	TreeItem,
+	EventEmitter,
+	TreeItemCollapsibleState,
+	type ExtensionContext,
+} from 'vscode';
 import { gitPull } from './commands/gitPull';
+import { gitPush } from './commands/gitPush';
+// import { listBranches } from './commands/listBranches';
+import { jjMoveToBranch } from './commands/moveToBranch';
+import { JjRepository } from './repository/repository';
+import { sourceControl } from './repository/sourceControl';
+import path from 'node:path';
+import fs from 'node:fs';
+import { Run } from './command';
 
-function createResourceUri(relativePath: string): vscode.Uri {
-	const root = vscode.workspace?.workspaceFolders?.[0];
-	if (!root) throw new Error('fucky wucky');
-
-	const absolutePath = path.join(relativePath);
-	return vscode.Uri.file(absolutePath);
-}
-
-function mapChangeLine(line: string): vscode.SourceControlResourceState {
-	const [marker, file] = line.split(' ');
-	switch (marker) {
-		case 'A':
-		case 'M':
-			return {
-				resourceUri: createResourceUri(file),
-				contextValue: 'diffable',
-			};
-		case 'D':
-			return {
-				resourceUri: createResourceUri(file),
-				decorations: {
-					strikeThrough: true,
-					iconPath: '',
-				},
-			};
-		default:
-			throw new Error('Does not match');
+class Branch extends TreeItem {
+	constructor(
+		public readonly label: string,
+		private version: string,
+		public readonly collapsibleState: TreeItemCollapsibleState,
+	) {
+		super(label, collapsibleState);
+		this.tooltip = `${this.label}-${this.version}`;
+		this.description = this.version;
 	}
 }
 
-export async function activate(context: vscode.ExtensionContext) {
-	const jjSourceControl = vscode.scm.createSourceControl('jj', 'Jujutsu');
-	const modified = jjSourceControl.createResourceGroup(
-		'modified',
-		'Modified in commit',
+export class BranchesProvider implements TreeDataProvider<Branch> {
+	constructor(private workspaceRoot: string) {}
+
+	private _onDidChangeTreeData: EventEmitter<Branch | undefined | null | void> =
+		new EventEmitter<Branch | undefined | null | void>();
+	readonly onDidChangeTreeData: Event<Branch | undefined | null | void> =
+		this._onDidChangeTreeData.event;
+
+	refresh(): void {
+		this._onDidChangeTreeData.fire();
+	}
+
+	getTreeItem(element: Branch): TreeItem {
+		return element;
+	}
+
+	async getChildren(element?: Branch): Promise<Branch[]> {
+		if (!this.workspaceRoot) {
+			window.showInformationMessage(
+				'No Jujutsu information available - No workspace given',
+			);
+			return Promise.resolve([]);
+		}
+		if (element) console.info(element);
+		else {
+			const branchCommand = new Run('jj', {
+				args: ['branch', 'list'],
+				cwd: this.workspaceRoot,
+				splitByLines: true,
+			});
+
+			const { stdout } = branchCommand.streamOutput();
+
+			const out: Branch[] = [];
+
+			for await (const line of stdout) {
+				const [branch, revision, gitCommit] = line.split(' ');
+				out.push(
+					new Branch(
+						branch.slice(0, -1),
+						revision,
+						TreeItemCollapsibleState.None,
+					),
+				);
+			}
+			return out;
+		}
+		return Promise.resolve([]);
+	}
+
+	/**
+	 * Given the path to package.json, read all its dependencies and devDependencies.
+	 */
+	private getDepsInPackageJson(packageJsonPath: string): Branch[] {
+		if (this.pathExists(packageJsonPath)) {
+			const toDep = (moduleName: string, version: string): Branch => {
+				if (
+					this.pathExists(
+						path.join(this.workspaceRoot, 'node_modules', moduleName),
+					)
+				) {
+					return new Branch(
+						moduleName,
+						version,
+						TreeItemCollapsibleState.Collapsed,
+					);
+				} else {
+					return new Branch(moduleName, version, TreeItemCollapsibleState.None);
+				}
+			};
+
+			const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+
+			const deps = packageJson.dependencies
+				? Object.keys(packageJson.dependencies).map((dep) =>
+						toDep(dep, packageJson.dependencies[dep]),
+					)
+				: [];
+			const devDeps = packageJson.devDependencies
+				? Object.keys(packageJson.devDependencies).map((dep) =>
+						toDep(dep, packageJson.devDependencies[dep]),
+					)
+				: [];
+			return deps.concat(devDeps);
+		} else {
+			return [];
+		}
+	}
+
+	private pathExists(p: string): boolean {
+		try {
+			fs.accessSync(p);
+			return true;
+		} catch (err) {
+			return false;
+		}
+	}
+}
+
+export async function activate(context: ExtensionContext) {
+	const repository = new JjRepository(sourceControl);
+	// Initial population of the working groups
+	await repository.updateWorkgroups();
+	// Set the context of the SCM Provider
+	commands.executeCommand('setContext', 'scmProvider', 'jj');
+
+	const rootPath =
+		workspace.workspaceFolders && workspace.workspaceFolders.length > 0
+			? workspace.workspaceFolders[0].uri.fsPath
+			: undefined;
+	if (rootPath === undefined) {
+		console.error('why is this undefined');
+		return;
+	}
+	const ndp = new BranchesProvider(rootPath);
+	context.subscriptions.push(
+		window.registerTreeDataProvider('jj.views.branches', ndp),
+		commands.registerCommand('jj.refreshBranches', () => ndp.refresh()),
 	);
-	const root = vscode.workspace?.workspaceFolders?.[0];
 
-	if (!root) return void 0;
+	// The repo implements the Disposable trait, so we just append it to the subscriptions.
+	// Part of its disposal process is disposing of anything it was responsible for
+	// enqueueing
+	context.subscriptions.push(repository);
 
-	context.subscriptions.push(listBranches, gitPush, gitPull);
-
-	const initialRun = new Run('jj', {
-		args: ['st', '--no-pager'],
-		cwd: root.uri.fsPath,
-	});
-
-	vscode.workspace.onDidDeleteFiles(async () => {
-		const b = initialRun.clone();
-		const output = await b.output();
-		const splitValue = output.split(/\r?\n/);
-		modified.resourceStates = [];
-		for (const line of splitValue) {
-			if (line.startsWith('Working copy') || line.startsWith('Parent commit'))
-				continue;
-			modified.resourceStates = modified.resourceStates.concat([
-				mapChangeLine(line),
-			]);
-		}
-		console.info('hi you');
-	});
-
-	vscode.workspace.onDidCreateFiles(async () => {
-		const b = initialRun.clone();
-		const output = await b.output();
-		const splitValue = output.split(/\r?\n/);
-		modified.resourceStates = [];
-		for (const line of splitValue) {
-			if (line.startsWith('Working copy') || line.startsWith('Parent commit'))
-				continue;
-			modified.resourceStates = modified.resourceStates.concat([
-				mapChangeLine(line),
-			]);
-		}
-		console.info('hi you');
-	});
-
-	vscode.workspace.onDidSaveTextDocument(async () => {
-		console.info('on did save');
-		const b = initialRun.clone();
-		const splitValue = (await b.output()).split(/\r?\n/);
-		modified.resourceStates = [];
-
-		for (const line of splitValue) {
-			if (line.startsWith('Working copy') || line.startsWith('Parent commit'))
-				continue;
-
-			modified.resourceStates = modified.resourceStates.concat([
-				mapChangeLine(line),
-			]);
-		}
-	});
-
-	const runValue = await initialRun.output();
-	const splitValue = runValue.split(/\r?\n/);
-
-	for (const line of splitValue) {
-		if (line.startsWith('Working copy') || line.startsWith('Parent commit'))
-			continue;
-
-		modified.resourceStates = modified.resourceStates.concat([
-			mapChangeLine(line),
-		]);
-	}
-
-	vscode.commands.executeCommand('setContext', 'scmProvider', 'jj');
-
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-
-	return void 0;
+	context.subscriptions.push(gitPush, gitPull, jjMoveToBranch);
 }
 
 // This method is called when your extension is deactivated
