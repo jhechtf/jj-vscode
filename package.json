@@ -7,15 +7,43 @@
     "vscode": "^1.88.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "SCM Providers"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "*",
+    "onFileSystem:jj"
+  ],
   "main": "./out/extension.js",
   "contributes": {
+    "menus": {
+      "scm/title": [
+        {
+          "command": "jj-vscode.helloWorld",
+          "when": "scmProvider == jj",
+          "group": "navigation@1"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "jj-vscode.helloWorld",
+          "group": "inline@1"
+        }
+      ]
+    },
     "commands": [
       {
-        "command": "jj-vscode.helloWorld",
-        "title": "Hello World"
+        "command": "jj.listBranches",
+        "title": "JJ: List Branches"
+      },
+      {
+        "command": "jj.gitPush",
+        "title": "JJ: Git Push",
+        "icon": "$(megaphone)"
+      },
+      {
+        "command": "jj.gitPull",
+        "title": "JJ: Git Pull"
       }
     ]
   },
@@ -24,18 +52,20 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "pnpm run compile && pnpm run lint",
-    "lint": "eslint src --ext ts",
-    "test": "vscode-test"
+    "lint": "biome lint ./src",
+    "lint:fix": "biome lint --apply ./src",
+    "test": "vscode-test",
+    "format": "biome format ./src",
+    "format:fix": "biome format --write ./src"
   },
   "devDependencies": {
-    "@types/vscode": "^1.88.0",
+    "@biomejs/biome": "1.7.0",
     "@types/mocha": "^10.0.6",
     "@types/node": "18.x",
-    "@typescript-eslint/eslint-plugin": "^7.4.0",
-    "@typescript-eslint/parser": "^7.4.0",
-    "eslint": "^8.57.0",
-    "typescript": "^5.3.3",
+    "@types/vscode": "^1.88.0",
     "@vscode/test-cli": "^0.0.8",
-    "@vscode/test-electron": "^2.3.9"
+    "@vscode/test-electron": "^2.3.9",
+    "eslint": "^8.57.0",
+    "typescript": "^5.3.3"
   }
 }
